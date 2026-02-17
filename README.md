@@ -9,7 +9,8 @@ This repository now contains a **playable 3D vertical slice** of an MMORPG-style
 - Inventory + stackable items
 - Skills with XP + level progression (Woodcutting, Mining, Fishing)
 - A simple NPC quest flow with requirements and rewards
-- Real-time HUD panel for stats, inventory, and quest state
+- RuneScape-style HUD with minimap, orbs, tabbed side panel, and action bar
+- Character and world animations (walk cycles, gather/talk actions, ambient node motion)
 
 ## Run locally
 

@@ -3,12 +3,15 @@ import * as THREE from "https://unpkg.com/three@0.161.0/build/three.module.js";
 const worldSize = 20;
 const viewport = document.getElementById("game");
 const ui = document.getElementById("ui");
+const hudBottom = document.getElementById("hud-bottom");
 
 const player = {
   x: 10,
   y: 10,
   hp: 100,
   maxHp: 100,
+  runEnergy: 100,
+  prayer: 100,
   gold: 25,
   inventory: new Map(),
   skills: {
@@ -16,10 +19,15 @@ const player = {
     mining: { level: 1, xp: 0 },
     fishing: { level: 1, xp: 0 },
   },
-  quest: {
-    accepted: false,
-    completed: false,
-  },
+  quest: { accepted: false, completed: false },
+};
+
+const gameState = {
+  activeTab: "stats",
+  action: "idle",
+  actionUntil: 0,
+  moving: false,
+  lastMoveAt: 0,
 };
 
 const nodes = [
@@ -40,226 +48,170 @@ const recipes = {
 };
 
 const levelFromXp = (xp) => Math.floor(Math.sqrt(xp / 100)) + 1;
+const xpIntoLevel = (xp) => xp % 100;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color("#0d1323");
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200);
-camera.position.set(worldSize * 0.5, 19, worldSize * 1.2);
+camera.position.set(worldSize * 0.5, 18, worldSize * 1.2);
 camera.lookAt(worldSize * 0.5, 0, worldSize * 0.5);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 viewport.appendChild(renderer.domElement);
 
-const ambient = new THREE.AmbientLight(0xffffff, 0.5);
-scene.add(ambient);
-const sunlight = new THREE.DirectionalLight(0xc9e4ff, 1.05);
-sunlight.position.set(16, 26, 9);
-sunlight.castShadow = true;
-sunlight.shadow.mapSize.set(1024, 1024);
-scene.add(sunlight);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const sun = new THREE.DirectionalLight(0xc9e4ff, 1.05);
+sun.position.set(16, 24, 8);
+sun.castShadow = true;
+scene.add(sun);
 
-const grid = new THREE.Group();
-scene.add(grid);
+const ground = new THREE.Group();
+scene.add(ground);
 
 const nodeMeshes = new Map();
+const nodeBaseY = new Map();
 
 function worldToScene(x, y) {
   return { x: x + 0.5, z: y + 0.5 };
 }
 
-function createHumanoid({ skin = 0xf1c39a, torso = 0x4978ff, leg = 0x2a2f3d, boot = 0x1f232e, accent = 0xffffff }) {
+function createHumanoid(colors) {
   const root = new THREE.Group();
-
-  const skinMat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.68 });
-  const torsoMat = new THREE.MeshStandardMaterial({ color: torso, roughness: 0.58, metalness: 0.08 });
-  const legMat = new THREE.MeshStandardMaterial({ color: leg, roughness: 0.6 });
-  const bootMat = new THREE.MeshStandardMaterial({ color: boot, roughness: 0.5 });
-  const accentMat = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.5, metalness: 0.12 });
+  const skin = new THREE.MeshStandardMaterial({ color: colors.skin, roughness: 0.68 });
+  const cloth = new THREE.MeshStandardMaterial({ color: colors.torso, roughness: 0.58 });
+  const leg = new THREE.MeshStandardMaterial({ color: colors.legs, roughness: 0.6 });
 
   const pelvis = new THREE.Group();
   root.add(pelvis);
 
-  const torsoMesh = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.75, 0.3), torsoMat);
-  torsoMesh.position.y = 1.65;
-  torsoMesh.castShadow = true;
-  pelvis.add(torsoMesh);
+  const parts = { arms: [], legs: [] };
 
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.1, 10), skinMat);
-  neck.position.y = 2.08;
-  neck.castShadow = true;
-  pelvis.add(neck);
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.76, 0.32), cloth);
+  torso.position.y = 1.66;
+  torso.castShadow = true;
+  pelvis.add(torso);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.23, 18, 16), skinMat);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.23, 20, 16), skin);
   head.position.y = 2.32;
   head.castShadow = true;
   pelvis.add(head);
 
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.08, 8), skinMat);
-  nose.rotation.x = Math.PI / 2;
-  nose.position.set(0, 2.31, 0.22);
-  pelvis.add(nose);
+  [-1, 1].forEach((d) => {
+    const arm = new THREE.Group();
+    arm.position.set(0.35 * d, 1.88, 0);
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.3, 6, 10), skin);
+    upper.rotation.z = d * 0.1;
+    upper.position.y = -0.15;
+    upper.castShadow = true;
+    const lower = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.26, 6, 10), skin);
+    lower.position.y = -0.43;
+    lower.castShadow = true;
+    arm.add(upper, lower);
+    pelvis.add(arm);
+    parts.arms.push(arm);
 
-  const shoulderY = 1.88;
-  [-1, 1].forEach((dir) => {
-    const shoulder = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 10), skinMat);
-    shoulder.position.set(0.33 * dir, shoulderY, 0);
-    shoulder.castShadow = true;
-    pelvis.add(shoulder);
-
-    const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.35, 6, 10), skinMat);
-    upperArm.position.set(0.45 * dir, 1.68, 0);
-    upperArm.rotation.z = dir * 0.08;
-    upperArm.castShadow = true;
-    pelvis.add(upperArm);
-
-    const foreArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.3, 6, 10), skinMat);
-    foreArm.position.set(0.48 * dir, 1.38, 0.01);
-    foreArm.rotation.z = dir * 0.05;
-    foreArm.castShadow = true;
-    pelvis.add(foreArm);
-
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 10), skinMat);
-    hand.position.set(0.49 * dir, 1.14, 0.03);
-    hand.castShadow = true;
-    pelvis.add(hand);
-  });
-
-  [-1, 1].forEach((dir) => {
-    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.42, 6, 10), legMat);
-    thigh.position.set(0.14 * dir, 1.04, 0);
+    const legGroup = new THREE.Group();
+    legGroup.position.set(0.15 * d, 1.18, 0);
+    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.35, 6, 10), leg);
+    thigh.position.y = -0.2;
     thigh.castShadow = true;
-    pelvis.add(thigh);
-
-    const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, 0.38, 6, 10), legMat);
-    shin.position.set(0.14 * dir, 0.63, 0.01);
+    const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, 0.32, 6, 10), leg);
+    shin.position.y = -0.55;
     shin.castShadow = true;
-    pelvis.add(shin);
-
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.09, 0.28), bootMat);
-    foot.position.set(0.14 * dir, 0.29, 0.07);
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.09, 0.28), leg);
+    foot.position.set(0, -0.78, 0.08);
     foot.castShadow = true;
-    pelvis.add(foot);
+    legGroup.add(thigh, shin, foot);
+    pelvis.add(legGroup);
+    parts.legs.push(legGroup);
   });
 
-  const belt = new THREE.Mesh(new THREE.TorusGeometry(0.21, 0.03, 10, 24), accentMat);
-  belt.rotation.x = Math.PI / 2;
-  belt.position.y = 1.27;
-  pelvis.add(belt);
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.025, 10, 24), new THREE.MeshStandardMaterial({ color: colors.accent }));
+  collar.rotation.x = Math.PI / 2;
+  collar.position.y = 2.02;
+  pelvis.add(collar);
 
+  root.userData.parts = parts;
   root.position.y = 0.02;
   return root;
 }
 
 function createTree() {
-  const tree = new THREE.Group();
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.12, 0.16, 0.9, 10),
-    new THREE.MeshStandardMaterial({ color: 0x6d4a2c, roughness: 0.82 }),
-  );
-  trunk.position.y = 0.5;
+  const group = new THREE.Group();
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 1, 10), new THREE.MeshStandardMaterial({ color: 0x6d4a2c }));
+  trunk.position.y = 0.55;
   trunk.castShadow = true;
-  tree.add(trunk);
-
-  const leafMaterial = new THREE.MeshStandardMaterial({ color: 0x2faa46, roughness: 0.86 });
-  [[0, 1.15, 0, 0.45], [-0.22, 1.0, 0.1, 0.35], [0.23, 1.05, -0.05, 0.33]].forEach(([x, y, z, r]) => {
-    const lobe = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 12), leafMaterial);
-    lobe.position.set(x, y, z);
-    lobe.castShadow = true;
-    tree.add(lobe);
+  group.add(trunk);
+  const leaves = new THREE.MeshStandardMaterial({ color: 0x2faa46, roughness: 0.85 });
+  [[0, 1.24, 0, 0.44], [0.22, 1.08, 0.02, 0.32], [-0.22, 1.06, -0.03, 0.32]].forEach(([x, y, z, r]) => {
+    const l = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 12), leaves);
+    l.position.set(x, y, z);
+    l.castShadow = true;
+    group.add(l);
   });
-
-  return tree;
+  return group;
 }
 
 function createRock() {
-  const rock = new THREE.Mesh(
-    new THREE.DodecahedronGeometry(0.38, 0),
-    new THREE.MeshStandardMaterial({ color: 0x8e98ad, roughness: 0.72, metalness: 0.12 }),
-  );
+  const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.38), new THREE.MeshStandardMaterial({ color: 0x8e98ad, roughness: 0.7 }));
   rock.castShadow = true;
   rock.scale.set(1.05, 0.8, 0.95);
   return rock;
 }
 
 function createFishNode() {
-  const fishGroup = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.SphereGeometry(0.21, 14, 10),
-    new THREE.MeshStandardMaterial({ color: 0x48bbff, roughness: 0.35, metalness: 0.2 }),
-  );
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 12), new THREE.MeshStandardMaterial({ color: 0x48bbff }));
   body.scale.set(1.2, 0.65, 0.65);
   body.castShadow = true;
-  fishGroup.add(body);
-
-  const tail = new THREE.Mesh(
-    new THREE.ConeGeometry(0.14, 0.22, 3),
-    new THREE.MeshStandardMaterial({ color: 0x2f8fd8, roughness: 0.4 }),
-  );
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.22, 3), new THREE.MeshStandardMaterial({ color: 0x2f8fd8 }));
+  tail.position.x = -0.28;
   tail.rotation.z = Math.PI / 2;
-  tail.position.x = -0.27;
   tail.castShadow = true;
-  fishGroup.add(tail);
-
-  const fin = new THREE.Mesh(
-    new THREE.ConeGeometry(0.05, 0.12, 8),
-    new THREE.MeshStandardMaterial({ color: 0x6ad1ff, roughness: 0.35 }),
-  );
-  fin.position.set(0, 0.14, 0);
-  fishGroup.add(fin);
-
-  fishGroup.position.y = 0.4;
-  return fishGroup;
+  g.add(body, tail);
+  g.position.y = 0.4;
+  return g;
 }
 
-const playerRig = createHumanoid({ torso: 0xffd166, leg: 0x313645, accent: 0xfaf5a7 });
-const npcRig = createHumanoid({ torso: 0xc88cff, leg: 0x3a294b, accent: 0xe9d7ff });
-scene.add(playerRig);
-scene.add(npcRig);
+const playerRig = createHumanoid({ skin: 0xf1c39a, torso: 0xffd166, legs: 0x313645, accent: 0xfaf5a7 });
+const npcRig = createHumanoid({ skin: 0xf0d1b3, torso: 0xc88cff, legs: 0x3a294b, accent: 0xe9d7ff });
+scene.add(playerRig, npcRig);
 
-function addItem(name, qty = 1) {
-  player.inventory.set(name, (player.inventory.get(name) || 0) + qty);
-}
-
-function itemCount(name) {
-  return player.inventory.get(name) || 0;
-}
-
+function addItem(name, qty = 1) { player.inventory.set(name, (player.inventory.get(name) || 0) + qty); }
+function itemCount(name) { return player.inventory.get(name) || 0; }
 function consumeItem(name, qty) {
   const current = itemCount(name);
   if (current < qty) return false;
   const next = current - qty;
-  if (next === 0) player.inventory.delete(name);
+  if (!next) player.inventory.delete(name);
   else player.inventory.set(name, next);
   return true;
 }
-
 function addXp(skill, amount) {
   const s = player.skills[skill];
   s.xp += amount;
   s.level = levelFromXp(s.xp);
 }
+function getNodeAt(x, y) { return nodes.find((n) => n.x === x && n.y === y && n.hp > 0); }
+function canMove(x, y) { return x >= 0 && x < worldSize && y >= 0 && y < worldSize; }
 
-function getNodeAt(x, y) {
-  return nodes.find((n) => n.x === x && n.y === y && n.hp > 0);
-}
-
-function canMove(x, y) {
-  return x >= 0 && x < worldSize && y >= 0 && y < worldSize;
+function startAction(action, ms) {
+  gameState.action = action;
+  gameState.actionUntil = performance.now() + ms;
 }
 
 function harvest() {
   const node = getNodeAt(player.x, player.y);
   if (!node) return;
 
+  startAction("gather", 400);
   node.hp -= 1;
   if (node.hp <= 0) {
     const cfg = recipes[node.kind];
     addItem(cfg.item, 1);
     addXp(cfg.skill, cfg.xp);
-
     setTimeout(() => {
       node.hp = cfg.maxHp;
       syncVisualState();
@@ -271,12 +223,12 @@ function harvest() {
 function interactNpc() {
   const near = Math.abs(player.x - npc.x) + Math.abs(player.y - npc.y) <= 1;
   if (!near) return;
+  startAction("talk", 450);
 
   if (!player.quest.accepted) {
     player.quest.accepted = true;
     return;
   }
-
   if (!player.quest.completed) {
     const hasReq = itemCount("Logs") >= 2 && itemCount("Ore") >= 2 && itemCount("Fish") >= 1;
     if (hasReq) {
@@ -292,102 +244,120 @@ function interactNpc() {
   }
 }
 
-function buildGround() {
+function buildWorld() {
   const evenMat = new THREE.MeshStandardMaterial({ color: 0x29405f, roughness: 0.95 });
   const oddMat = new THREE.MeshStandardMaterial({ color: 0x263a56, roughness: 0.95 });
-  const geo = new THREE.BoxGeometry(1, 0.15, 1);
+  const tileGeo = new THREE.BoxGeometry(1, 0.15, 1);
 
   for (let y = 0; y < worldSize; y++) {
     for (let x = 0; x < worldSize; x++) {
-      const tile = new THREE.Mesh(geo, (x + y) % 2 === 0 ? evenMat : oddMat);
+      const tile = new THREE.Mesh(tileGeo, (x + y) % 2 === 0 ? evenMat : oddMat);
       const pos = worldToScene(x, y);
       tile.position.set(pos.x, 0, pos.z);
       tile.receiveShadow = true;
-      grid.add(tile);
+      ground.add(tile);
     }
   }
-}
 
-function createNodeMesh(kind) {
-  if (kind === "tree") return createTree();
-  if (kind === "rock") return createRock();
-  return createFishNode();
-}
-
-function buildNodesAndNpc() {
   nodes.forEach((node) => {
-    const mesh = createNodeMesh(node.kind);
+    const mesh = node.kind === "tree" ? createTree() : node.kind === "rock" ? createRock() : createFishNode();
     const pos = worldToScene(node.x, node.y);
     mesh.position.set(pos.x, mesh.position.y, pos.z);
     scene.add(mesh);
     nodeMeshes.set(node, mesh);
+    nodeBaseY.set(node, mesh.position.y);
   });
 
-  const npcPos = worldToScene(npc.x, npc.y);
-  npcRig.position.set(npcPos.x, npcRig.position.y, npcPos.z);
+  const npos = worldToScene(npc.x, npc.y);
+  npcRig.position.set(npos.x, npcRig.position.y, npos.z);
 }
 
 function syncVisualState() {
   const p = worldToScene(player.x, player.y);
-  playerRig.position.set(p.x, playerRig.position.y, p.z);
+  playerRig.position.x = p.x;
+  playerRig.position.z = p.z;
 
   nodeMeshes.forEach((mesh, node) => {
     mesh.visible = node.hp > 0;
-    const vitality = node.hp > 0 ? Math.max(0.45, node.hp / recipes[node.kind].maxHp) : 0.1;
-    mesh.scale.y = vitality;
+    mesh.scale.y = node.hp > 0 ? Math.max(0.45, node.hp / recipes[node.kind].maxHp) : 0.1;
   });
 }
 
 function skillRows() {
-  return Object.entries(player.skills)
-    .map(([name, data]) => `<div class="kv"><span>${name}</span><span>Lv ${data.level} (${data.xp} XP)</span></div>`)
-    .join("");
+  return Object.entries(player.skills).map(([name, data]) => {
+    const pct = xpIntoLevel(data.xp);
+    return `<div class="kv"><span>${name}</span><span>Lv ${data.level} (${data.xp}xp)</span></div><div class="xpbar"><div class="xpfill" style="width:${pct}%"></div></div>`;
+  }).join("");
 }
 
-function inventoryRows() {
-  if (player.inventory.size === 0) return '<div class="empty">Empty</div>';
-  return [...player.inventory.entries()]
-    .map(([name, qty]) => `<div class="kv"><span>${name}</span><span>x${qty}</span></div>`)
-    .join("");
+function minimapGrid() {
+  const cells = [];
+  for (let y = -3; y <= 3; y++) {
+    for (let x = -3; x <= 3; x++) {
+      const tx = player.x + x;
+      const ty = player.y + y;
+      let cls = "mini";
+      if (x === 0 && y === 0) cls += " player";
+      else if (tx === npc.x && ty === npc.y) cls += " npc";
+      else if (nodes.some((n) => n.x === tx && n.y === ty && n.hp > 0)) cls += " node";
+      cells.push(`<div class="${cls}"></div>`);
+    }
+  }
+  return cells.join("");
 }
 
 function questStatus() {
-  if (!player.quest.accepted) return '<p class="quest-open">Talk to the Quest Sage (Q while adjacent).</p>';
+  if (!player.quest.accepted) return '<p class="quest-open">Talk to the Quest Sage to start Gatherer\'s Trial.</p>';
   if (player.quest.completed) return '<p class="quest-done">Completed: Gatherer\'s Trial</p>';
+  return `<p class="quest-open">Gatherer's Trial (active)</p><ul class="list"><li>Logs: ${itemCount("Logs")}/2</li><li>Ore: ${itemCount("Ore")}/2</li><li>Fish: ${itemCount("Fish")}/1</li></ul>`;
+}
 
-  return `
-    <p class="quest-open">Gatherer's Trial (active)</p>
-    <ul class="list">
-      <li>Logs: ${itemCount("Logs")}/2</li>
-      <li>Ore: ${itemCount("Ore")}/2</li>
-      <li>Fish: ${itemCount("Fish")}/1</li>
-    </ul>
-    <p class="hint">Return to the Quest Sage and press Q.</p>
-  `;
+function tabContent() {
+  if (gameState.activeTab === "stats") {
+    return `<h2>Skills</h2>${skillRows()}`;
+  }
+  if (gameState.activeTab === "inventory") {
+    const rows = player.inventory.size ? [...player.inventory.entries()].map(([n, q]) => `<div class="kv"><span>${n}</span><span>x${q}</span></div>`).join("") : '<div class="empty">Inventory empty</div>';
+    return `<h2>Inventory</h2>${rows}<h2>Gold</h2><div class="kv"><span>Coins</span><span>${player.gold}</span></div>`;
+  }
+  if (gameState.activeTab === "quest") {
+    return `<h2>Quest Journal</h2>${questStatus()}<p class="hint">Press Q near Quest Sage.</p>`;
+  }
+  return `<h2>Equipment</h2><div class="kv"><span>Head</span><span>-</span></div><div class="kv"><span>Body</span><span>-</span></div><div class="kv"><span>Legs</span><span>-</span></div><div class="kv"><span>Weapon</span><span>Hands</span></div>`;
+}
+
+function renderBottomHud() {
+  const slots = ["Atk", "Str", "Def", "Inv", "Pray", "Magic", "Map", "Quest"];
+  hudBottom.innerHTML = slots.map((s) => `<div class="slot">${s}</div>`).join("");
 }
 
 function renderUi() {
   ui.innerHTML = `
-    <h2>Character</h2>
-    <div class="kv"><span>HP</span><span>${player.hp}/${player.maxHp}</span></div>
-    <div class="kv"><span>Gold</span><span>${player.gold}</span></div>
+    <div class="rs-top">
+      <div class="orb-wrap">
+        <div class="orb hp">${player.hp}</div>
+        <div class="orb run">${Math.round(player.runEnergy)}</div>
+        <div class="orb pray">${Math.round(player.prayer)}</div>
+      </div>
+      <div class="minimap"><div class="minimap-grid">${minimapGrid()}</div></div>
+    </div>
 
-    <h2>Skills</h2>
-    ${skillRows()}
+    <div class="tabs">
+      <button class="tab ${gameState.activeTab === "stats" ? "active" : ""}" data-tab="stats">Stats</button>
+      <button class="tab ${gameState.activeTab === "inventory" ? "active" : ""}" data-tab="inventory">Inv</button>
+      <button class="tab ${gameState.activeTab === "quest" ? "active" : ""}" data-tab="quest">Quest</button>
+      <button class="tab ${gameState.activeTab === "equipment" ? "active" : ""}" data-tab="equipment">Equip</button>
+    </div>
 
-    <h2>Inventory</h2>
-    ${inventoryRows()}
-
-    <h2>Quest</h2>
-    ${questStatus()}
-
-    <h2>Legend</h2>
-    <div class="kv"><span>Yellow</span><span>You</span></div>
-    <div class="kv"><span>Purple</span><span>Quest Sage</span></div>
-    <div class="kv"><span>Trees</span><span>Woodcutting</span></div>
-    <div class="kv"><span>Rocks</span><span>Mining</span></div>
-    <div class="kv"><span>Fish</span><span>Fishing</span></div>
+    <section class="panel">${tabContent()}</section>
   `;
+
+  ui.querySelectorAll(".tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      gameState.activeTab = btn.dataset.tab;
+      renderUi();
+    });
+  });
 }
 
 function fitRenderer() {
@@ -399,53 +369,75 @@ function fitRenderer() {
 }
 
 window.addEventListener("resize", fitRenderer);
-
 window.addEventListener("keydown", (e) => {
   let nx = player.x;
   let ny = player.y;
+  const key = e.key.toLowerCase();
 
-  if (e.key === "ArrowUp" || e.key.toLowerCase() === "w") ny -= 1;
-  if (e.key === "ArrowDown" || e.key.toLowerCase() === "s") ny += 1;
-  if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") nx -= 1;
-  if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") nx += 1;
+  if (key === "arrowup" || key === "w") ny -= 1;
+  if (key === "arrowdown" || key === "s") ny += 1;
+  if (key === "arrowleft" || key === "a") nx -= 1;
+  if (key === "arrowright" || key === "d") nx += 1;
 
-  if (canMove(nx, ny)) {
+  if (canMove(nx, ny) && (nx !== player.x || ny !== player.y)) {
     player.x = nx;
     player.y = ny;
+    gameState.moving = true;
+    gameState.lastMoveAt = performance.now();
   }
 
-  if (e.key.toLowerCase() === "e") harvest();
-  if (e.key.toLowerCase() === "q") interactNpc();
+  if (key === "e") harvest();
+  if (key === "q") interactNpc();
 
   syncVisualState();
   renderUi();
 });
 
+function animateRig(rig, t, moving, action) {
+  const { arms, legs } = rig.userData.parts;
+  const walk = moving ? Math.sin(t * 10) * 0.45 : Math.sin(t * 2) * 0.05;
+  arms[0].rotation.x = walk;
+  arms[1].rotation.x = -walk;
+  legs[0].rotation.x = -walk;
+  legs[1].rotation.x = walk;
+
+  if (action === "gather") {
+    arms[1].rotation.x = -1.2 + Math.sin(t * 30) * 0.25;
+    rig.rotation.y = 0.2;
+  } else if (action === "talk") {
+    arms[0].rotation.x = Math.sin(t * 12) * 0.5;
+    rig.rotation.y = -0.18;
+  } else {
+    rig.rotation.y = Math.sin(t * 1.4) * 0.04;
+  }
+}
+
 function animate() {
   requestAnimationFrame(animate);
   const t = performance.now() * 0.001;
+  if (performance.now() > gameState.lastMoveAt + 120) gameState.moving = false;
+  if (performance.now() > gameState.actionUntil) gameState.action = "idle";
 
-  playerRig.rotation.y = Math.sin(t * 1.8) * 0.05;
-  playerRig.position.y = 0.02 + Math.sin(t * 2.5) * 0.025;
+  player.runEnergy = Math.max(0, Math.min(100, player.runEnergy + (gameState.moving ? -0.06 : 0.03)));
+  player.prayer = Math.max(0, Math.min(100, player.prayer - 0.003));
 
-  npcRig.rotation.y = t * 0.35;
+  animateRig(playerRig, t, gameState.moving, gameState.action);
+  animateRig(npcRig, t + 2.4, false, "idle");
 
   nodeMeshes.forEach((mesh, node) => {
+    if (node.kind === "tree") mesh.rotation.z = Math.sin(t * 0.8 + node.x) * 0.03;
     if (node.kind === "fish") {
-      mesh.rotation.y = Math.sin(t * 5 + node.x) * 0.45;
-      mesh.position.y = 0.4 + Math.sin(t * 4 + node.y) * 0.05;
-    }
-    if (node.kind === "tree") {
-      mesh.rotation.z = Math.sin(t * 0.9 + node.x * 0.3) * 0.03;
+      mesh.rotation.y = Math.sin(t * 5 + node.x) * 0.5;
+      mesh.position.y = (nodeBaseY.get(node) || 0.4) + Math.sin(t * 4 + node.y) * 0.05;
     }
   });
 
   renderer.render(scene, camera);
 }
 
-buildGround();
-buildNodesAndNpc();
+buildWorld();
 fitRenderer();
 syncVisualState();
+renderBottomHud();
 renderUi();
 animate();
