@@ -1,7 +1,8 @@
 # CakeScape (RuneScape-inspired MMO foundation)
 
-This repository now contains a **playable vertical slice** of an MMORPG-style game loop inspired by classic RuneScape systems:
+This repository now contains a **playable 3D vertical slice** of an MMORPG-style game loop inspired by classic RuneScape systems:
 
+- 3D WebGL world rendering with Three.js
 - Tile-based overworld movement
 - Gathering resources (trees, rocks, fishing spots)
 - Inventory + stackable items

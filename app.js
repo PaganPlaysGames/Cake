@@ -1,7 +1,7 @@
-const tileSize = 32;
+import * as THREE from "https://unpkg.com/three@0.161.0/build/three.module.js";
+
 const worldSize = 20;
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
+const viewport = document.getElementById("game");
 const ui = document.getElementById("ui");
 
 const player = {
@@ -34,12 +34,52 @@ const nodes = [
 const npc = { x: 10, y: 2, name: "Quest Sage" };
 
 const recipes = {
-  tree: { item: "Logs", skill: "woodcutting", xp: 25, respawn: 3500 },
-  rock: { item: "Ore", skill: "mining", xp: 30, respawn: 4500 },
-  fish: { item: "Fish", skill: "fishing", xp: 35, respawn: 3000 },
+  tree: { item: "Logs", skill: "woodcutting", xp: 25, respawn: 3500, maxHp: 3 },
+  rock: { item: "Ore", skill: "mining", xp: 30, respawn: 4500, maxHp: 4 },
+  fish: { item: "Fish", skill: "fishing", xp: 35, respawn: 3000, maxHp: 2 },
 };
 
 const levelFromXp = (xp) => Math.floor(Math.sqrt(xp / 100)) + 1;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color("#0d1323");
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200);
+camera.position.set(worldSize * 0.5, 20, worldSize * 1.25);
+camera.lookAt(worldSize * 0.5, 0, worldSize * 0.5);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+viewport.appendChild(renderer.domElement);
+
+const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+scene.add(ambient);
+const sunlight = new THREE.DirectionalLight(0xc9e4ff, 1.1);
+sunlight.position.set(15, 30, 8);
+scene.add(sunlight);
+
+const grid = new THREE.Group();
+scene.add(grid);
+
+const nodeMeshes = new Map();
+const nodeColors = { tree: 0x2fbf60, rock: 0x9ea8bb, fish: 0x3aa7ff };
+
+const playerMesh = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.32, 0.42, 0.85, 14),
+  new THREE.MeshStandardMaterial({ color: 0xffd166, metalness: 0.2, roughness: 0.5 }),
+);
+playerMesh.position.y = 0.45;
+scene.add(playerMesh);
+
+const npcMesh = new THREE.Mesh(
+  new THREE.CapsuleGeometry(0.35, 0.65, 6, 14),
+  new THREE.MeshStandardMaterial({ color: 0xc88cff, metalness: 0.15, roughness: 0.45 }),
+);
+npcMesh.position.y = 0.65;
+scene.add(npcMesh);
+
+function worldToScene(x, y) {
+  return { x: x + 0.5, z: y + 0.5 };
+}
 
 function addItem(name, qty = 1) {
   player.inventory.set(name, (player.inventory.get(name) || 0) + qty);
@@ -82,9 +122,10 @@ function harvest() {
     addItem(cfg.item, 1);
     addXp(cfg.skill, cfg.xp);
 
-    const originalHp = node.kind === "rock" ? 4 : node.kind === "tree" ? 3 : 2;
     setTimeout(() => {
-      node.hp = originalHp;
+      node.hp = cfg.maxHp;
+      syncVisualState();
+      renderUi();
     }, cfg.respawn);
   }
 }
@@ -113,47 +154,45 @@ function interactNpc() {
   }
 }
 
-window.addEventListener("keydown", (e) => {
-  let nx = player.x;
-  let ny = player.y;
+function buildGround() {
+  const evenMat = new THREE.MeshStandardMaterial({ color: 0x29405f, roughness: 0.95 });
+  const oddMat = new THREE.MeshStandardMaterial({ color: 0x263a56, roughness: 0.95 });
+  const geo = new THREE.BoxGeometry(1, 0.15, 1);
 
-  if (e.key === "ArrowUp" || e.key.toLowerCase() === "w") ny -= 1;
-  if (e.key === "ArrowDown" || e.key.toLowerCase() === "s") ny += 1;
-  if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") nx -= 1;
-  if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") nx += 1;
-
-  if (canMove(nx, ny)) {
-    player.x = nx;
-    player.y = ny;
-  }
-
-  if (e.key.toLowerCase() === "e") harvest();
-  if (e.key.toLowerCase() === "q") interactNpc();
-
-  render();
-});
-
-function drawTile(x, y, color) {
-  ctx.fillStyle = color;
-  ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
-}
-
-function drawWorld() {
   for (let y = 0; y < worldSize; y++) {
     for (let x = 0; x < worldSize; x++) {
-      const shade = (x + y) % 2 === 0 ? "#29405f" : "#263a56";
-      drawTile(x, y, shade);
+      const tile = new THREE.Mesh(geo, (x + y) % 2 === 0 ? evenMat : oddMat);
+      const pos = worldToScene(x, y);
+      tile.position.set(pos.x, 0, pos.z);
+      grid.add(tile);
     }
   }
+}
 
+function buildNodesAndNpc() {
   nodes.forEach((node) => {
-    if (node.hp <= 0) return;
-    const colors = { tree: "#3bc763", rock: "#9aa6bf", fish: "#4ed0ff" };
-    drawTile(node.x, node.y, colors[node.kind]);
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.68, 0.68, 0.68),
+      new THREE.MeshStandardMaterial({ color: nodeColors[node.kind], roughness: 0.55, metalness: 0.1 }),
+    );
+    const pos = worldToScene(node.x, node.y);
+    mesh.position.set(pos.x, 0.45, pos.z);
+    scene.add(mesh);
+    nodeMeshes.set(node, mesh);
   });
 
-  drawTile(npc.x, npc.y, "#c88cff");
-  drawTile(player.x, player.y, "#ffd166");
+  const npcPos = worldToScene(npc.x, npc.y);
+  npcMesh.position.set(npcPos.x, npcMesh.position.y, npcPos.z);
+}
+
+function syncVisualState() {
+  const p = worldToScene(player.x, player.y);
+  playerMesh.position.set(p.x, playerMesh.position.y, p.z);
+
+  nodeMeshes.forEach((mesh, node) => {
+    mesh.visible = node.hp > 0;
+    mesh.scale.y = node.hp > 0 ? Math.max(0.4, node.hp / recipes[node.kind].maxHp) : 0.2;
+  });
 }
 
 function skillRows() {
@@ -208,9 +247,48 @@ function renderUi() {
   `;
 }
 
-function render() {
-  drawWorld();
-  renderUi();
+function fitRenderer() {
+  const width = viewport.clientWidth;
+  const height = viewport.clientHeight;
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
 }
 
-render();
+window.addEventListener("resize", fitRenderer);
+
+window.addEventListener("keydown", (e) => {
+  let nx = player.x;
+  let ny = player.y;
+
+  if (e.key === "ArrowUp" || e.key.toLowerCase() === "w") ny -= 1;
+  if (e.key === "ArrowDown" || e.key.toLowerCase() === "s") ny += 1;
+  if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") nx -= 1;
+  if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") nx += 1;
+
+  if (canMove(nx, ny)) {
+    player.x = nx;
+    player.y = ny;
+  }
+
+  if (e.key.toLowerCase() === "e") harvest();
+  if (e.key.toLowerCase() === "q") interactNpc();
+
+  syncVisualState();
+  renderUi();
+});
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = performance.now() * 0.001;
+  playerMesh.position.y = 0.42 + Math.sin(t * 2.2) * 0.05;
+  npcMesh.rotation.y = t * 0.35;
+  renderer.render(scene, camera);
+}
+
+buildGround();
+buildNodesAndNpc();
+fitRenderer();
+syncVisualState();
+renderUi();
+animate();

@@ -5,7 +5,6 @@
   --edge: #2f3a52;
   --text: #ecf0ff;
   --muted: #a8b3ce;
-  --accent: #66d9ef;
 }
 
 * { box-sizing: border-box; }
@@ -18,7 +17,7 @@ body {
 }
 
 .layout {
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: 1rem;
   display: grid;
@@ -34,12 +33,19 @@ body {
   padding: 1rem;
 }
 
-canvas {
+.viewport {
   border: 2px solid #36425f;
   border-radius: 8px;
-  image-rendering: pixelated;
   width: 100%;
-  max-width: 640px;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  background: #0e1320;
+}
+
+.viewport canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .hint {
