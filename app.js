@@ -35,16 +35,21 @@ const nodes = [
   { x: 14, y: 5, kind: "tree", hp: 3 },
   { x: 2, y: 13, kind: "rock", hp: 4 },
   { x: 12, y: 15, kind: "rock", hp: 4 },
-  { x: 17, y: 9, kind: "fish", hp: 2 },
-  { x: 7, y: 17, kind: "fish", hp: 2 },
 ];
+
+const pondTiles = [
+  { x: 16, y: 8 }, { x: 17, y: 8 }, { x: 18, y: 8 },
+  { x: 16, y: 9 }, { x: 17, y: 9 }, { x: 18, y: 9 },
+  { x: 16, y: 10 }, { x: 17, y: 10 }, { x: 18, y: 10 },
+];
+const pondSet = new Set(pondTiles.map((t) => `${t.x},${t.y}`));
 
 const npc = { x: 10, y: 2, name: "Quest Sage" };
 
 const recipes = {
   tree: { item: "Logs", skill: "woodcutting", xp: 25, respawn: 3500, maxHp: 3 },
   rock: { item: "Ore", skill: "mining", xp: 30, respawn: 4500, maxHp: 4 },
-  fish: { item: "Fish", skill: "fishing", xp: 35, respawn: 3000, maxHp: 2 },
+  pond: { item: "Fish", skill: "fishing", xp: 35, action: 450 },
 };
 
 const levelFromXp = (xp) => Math.floor(Math.sqrt(xp / 100)) + 1;
@@ -68,7 +73,9 @@ sun.castShadow = true;
 scene.add(sun);
 
 const ground = new THREE.Group();
+const pondGroup = new THREE.Group();
 scene.add(ground);
+scene.add(pondGroup);
 
 const nodeMeshes = new Map();
 const nodeBaseY = new Map();
@@ -161,18 +168,15 @@ function createRock() {
   return rock;
 }
 
-function createFishNode() {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 12), new THREE.MeshStandardMaterial({ color: 0x48bbff }));
-  body.scale.set(1.2, 0.65, 0.65);
-  body.castShadow = true;
-  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.22, 3), new THREE.MeshStandardMaterial({ color: 0x2f8fd8 }));
-  tail.position.x = -0.28;
-  tail.rotation.z = Math.PI / 2;
-  tail.castShadow = true;
-  g.add(body, tail);
-  g.position.y = 0.4;
-  return g;
+function createPondSurface() {
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x2b83d4, transparent: true, opacity: 0.86, roughness: 0.2, metalness: 0.25 });
+  pondTiles.forEach((tile) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 0.05, 1), waterMat);
+    const pos = worldToScene(tile.x, tile.y);
+    mesh.position.set(pos.x, 0.03, pos.z);
+    mesh.receiveShadow = true;
+    pondGroup.add(mesh);
+  });
 }
 
 const playerRig = createHumanoid({ skin: 0xf1c39a, torso: 0xffd166, legs: 0x313645, accent: 0xfaf5a7 });
@@ -196,20 +200,19 @@ function addXp(skill, amount) {
 }
 function getNodeAt(x, y) { return nodes.find((n) => n.x === x && n.y === y && n.hp > 0); }
 function canMove(x, y) { return x >= 0 && x < worldSize && y >= 0 && y < worldSize; }
+function isNearPond(x, y) {
+  return pondTiles.some((t) => Math.abs(t.x - x) + Math.abs(t.y - y) <= 1);
+}
 
 function startAction(action, ms) {
   gameState.action = action;
   gameState.actionUntil = performance.now() + ms;
 }
 
-function harvest() {
-  const node = getNodeAt(player.x, player.y);
-  if (!node) return;
-
-  startAction("gather", 400);
+function completeNodeHarvest(node) {
+  const cfg = recipes[node.kind];
   node.hp -= 1;
   if (node.hp <= 0) {
-    const cfg = recipes[node.kind];
     addItem(cfg.item, 1);
     addXp(cfg.skill, cfg.xp);
     setTimeout(() => {
@@ -218,6 +221,37 @@ function harvest() {
       renderUi();
     }, cfg.respawn);
   }
+}
+
+function chopTree() {
+  const node = getNodeAt(player.x, player.y);
+  if (!node || node.kind !== "tree") return false;
+  startAction("gather", 420);
+  completeNodeHarvest(node);
+  return true;
+}
+
+function mineRock() {
+  const node = getNodeAt(player.x, player.y);
+  if (!node || node.kind !== "rock") return false;
+  startAction("gather", 450);
+  completeNodeHarvest(node);
+  return true;
+}
+
+function fishPond() {
+  if (!isNearPond(player.x, player.y)) return false;
+  const cfg = recipes.pond;
+  startAction("gather", cfg.action);
+  addItem(cfg.item, 1);
+  addXp(cfg.skill, cfg.xp);
+  return true;
+}
+
+function harvest() {
+  if (chopTree()) return;
+  if (mineRock()) return;
+  fishPond();
 }
 
 function interactNpc() {
@@ -259,8 +293,10 @@ function buildWorld() {
     }
   }
 
+  createPondSurface();
+
   nodes.forEach((node) => {
-    const mesh = node.kind === "tree" ? createTree() : node.kind === "rock" ? createRock() : createFishNode();
+    const mesh = node.kind === "tree" ? createTree() : createRock();
     const pos = worldToScene(node.x, node.y);
     mesh.position.set(pos.x, mesh.position.y, pos.z);
     scene.add(mesh);
@@ -299,6 +335,7 @@ function minimapGrid() {
       let cls = "mini";
       if (x === 0 && y === 0) cls += " player";
       else if (tx === npc.x && ty === npc.y) cls += " npc";
+      else if (pondSet.has(`${tx},${ty}`)) cls += " pond";
       else if (nodes.some((n) => n.x === tx && n.y === ty && n.hp > 0)) cls += " node";
       cells.push(`<div class="${cls}"></div>`);
     }
@@ -313,17 +350,13 @@ function questStatus() {
 }
 
 function tabContent() {
-  if (gameState.activeTab === "stats") {
-    return `<h2>Skills</h2>${skillRows()}`;
-  }
+  if (gameState.activeTab === "stats") return `<h2>Skills</h2>${skillRows()}`;
   if (gameState.activeTab === "inventory") {
     const rows = player.inventory.size ? [...player.inventory.entries()].map(([n, q]) => `<div class="kv"><span>${n}</span><span>x${q}</span></div>`).join("") : '<div class="empty">Inventory empty</div>';
     return `<h2>Inventory</h2>${rows}<h2>Gold</h2><div class="kv"><span>Coins</span><span>${player.gold}</span></div>`;
   }
-  if (gameState.activeTab === "quest") {
-    return `<h2>Quest Journal</h2>${questStatus()}<p class="hint">Press Q near Quest Sage.</p>`;
-  }
-  return `<h2>Equipment</h2><div class="kv"><span>Head</span><span>-</span></div><div class="kv"><span>Body</span><span>-</span></div><div class="kv"><span>Legs</span><span>-</span></div><div class="kv"><span>Weapon</span><span>Hands</span></div>`;
+  if (gameState.activeTab === "quest") return `<h2>Quest Journal</h2>${questStatus()}<p class="hint">Press Q near Quest Sage.</p>`;
+  return `<h2>Gathering</h2><div class="kv"><span>Tree function</span><span>Chop (E on tree)</span></div><div class="kv"><span>Rock function</span><span>Mine (E on rock)</span></div><div class="kv"><span>Pond function</span><span>Fish (E near pond)</span></div>`;
 }
 
 function renderBottomHud() {
@@ -346,7 +379,7 @@ function renderUi() {
       <button class="tab ${gameState.activeTab === "stats" ? "active" : ""}" data-tab="stats">Stats</button>
       <button class="tab ${gameState.activeTab === "inventory" ? "active" : ""}" data-tab="inventory">Inv</button>
       <button class="tab ${gameState.activeTab === "quest" ? "active" : ""}" data-tab="quest">Quest</button>
-      <button class="tab ${gameState.activeTab === "equipment" ? "active" : ""}" data-tab="equipment">Equip</button>
+      <button class="tab ${gameState.activeTab === "equipment" ? "active" : ""}" data-tab="equipment">Gather</button>
     </div>
 
     <section class="panel">${tabContent()}</section>
@@ -426,10 +459,13 @@ function animate() {
 
   nodeMeshes.forEach((mesh, node) => {
     if (node.kind === "tree") mesh.rotation.z = Math.sin(t * 0.8 + node.x) * 0.03;
-    if (node.kind === "fish") {
-      mesh.rotation.y = Math.sin(t * 5 + node.x) * 0.5;
-      mesh.position.y = (nodeBaseY.get(node) || 0.4) + Math.sin(t * 4 + node.y) * 0.05;
-    }
+    if (node.kind === "rock") mesh.rotation.y = Math.sin(t * 0.5 + node.x) * 0.08;
+    const baseY = nodeBaseY.get(node) || 0;
+    mesh.position.y = baseY + Math.sin(t * 1.8 + node.x) * 0.01;
+  });
+
+  pondGroup.children.forEach((water, i) => {
+    water.position.y = 0.03 + Math.sin(t * 2 + i * 0.6) * 0.01;
   });
 
   renderer.render(scene, camera);

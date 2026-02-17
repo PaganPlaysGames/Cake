@@ -5,7 +5,7 @@ This repository now contains a **playable 3D vertical slice** of an MMORPG-style
 - 3D WebGL world rendering with Three.js
 - Stylized 3D mesh models for humanoids, trees, rocks, and fish nodes
 - Tile-based overworld movement
-- Gathering resources (trees, rocks, fishing spots)
+- Gathering resources with dedicated functions (chop trees, mine rocks, fish at pond)
 - Inventory + stackable items
 - Skills with XP + level progression (Woodcutting, Mining, Fishing)
 - A simple NPC quest flow with requirements and rewards

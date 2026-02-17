@@ -101,6 +101,7 @@ body {
 .mini.player { background: #ffd166; }
 .mini.node { background: #4ab96d; }
 .mini.npc { background: #cb9eff; }
+.mini.pond { background: #3aa7ff; }
 
 .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.35rem; margin-bottom: 0.6rem; }
 .tab {
